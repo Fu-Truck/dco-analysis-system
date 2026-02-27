@@ -135,11 +135,11 @@ if run_analysis:
                 df_batch = df_batch.drop_duplicates(subset=['Process Order ID'], keep='first')
                 df_batch = df_batch.dropna(subset=['End date/time'])
                 df_batch = df_batch[df_batch['Type'] == '干清']
-                allowed_locations = ['CP Line9', 'CP Line10', 'CP Line11', 'CP Line12', 'CP Line05', 'CP Line08']
+                allowed_locations = ['CP Line 9', 'CP Line 10', 'CP Line 11', 'CP Line 12', 'CP Line 05', 'CP Line 08']
                 df_batch = df_batch[df_batch['Location'].isin(allowed_locations)]
                 
                 if 'Time Elapsed (seconds)' in df_batch.columns:
-                    df_batch = df_batch[df_batch['Time Elapsed (seconds)'] <= 18000]
+                    df_batch = df_batch[df_batch['Time Elapsed (seconds)'] <= 10800]
                 
                 with col2:
                     st.write("**清洗后**:")
