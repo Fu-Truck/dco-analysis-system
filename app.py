@@ -111,26 +111,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 公用函数 ====================
-def set_chinese_font():
-    """
-    设置matplotlib支持中文显示
-    """
-    system = platform.system()
-    
-    try:
-        if system == "Windows":
-            plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
-        elif system == "Darwin":  # macOS
-            plt.rcParams['font.sans-serif'] = ['PingFang SC', 'STHeiti', 'Arial Unicode MS']
-        else:  # Linux
-            plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS']
-        
-        plt.rcParams['axes.unicode_minus'] = False
-        return True
-    except Exception as e:
-        print(f"设置中文字体时出错：{e}")
-        return False
+# ==================== 设置sklearn不可用标志 ====================
+# 由于我们完全移除了sklearn依赖，直接设置为False
+SKLEARN_AVAILABLE = False
 
 # ==================== 标题区域 ====================
 st.markdown('<h1 class="main-header">📊 DCO综合分析系统</h1>', unsafe_allow_html=True)
@@ -676,6 +659,27 @@ def analyze_activity_data(df):
     
     return results
 
+# ==================== 设置中文字体函数 ====================
+def set_chinese_font():
+    """
+    设置matplotlib支持中文显示
+    """
+    system = platform.system()
+    
+    try:
+        if system == "Windows":
+            plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
+        elif system == "Darwin":  # macOS
+            plt.rcParams['font.sans-serif'] = ['PingFang SC', 'STHeiti', 'Arial Unicode MS']
+        else:  # Linux
+            plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS']
+        
+        plt.rcParams['axes.unicode_minus'] = False
+        return True
+    except Exception as e:
+        print(f"设置中文字体时出错：{e}")
+        return False
+
 # ==================== 主程序 ====================
 if run_button:
     if batch_file is None or activity_file is None:
@@ -959,7 +963,7 @@ st.markdown("---")
 st.markdown(
     """
     <div style="text-align: center; color: #6B7280; padding: 1rem;">
-        <p>DCO综合分析系统 v2.1 | 完全移除机器学习依赖 | 稳定可靠版本</p>
+        <p>DCO综合分析系统 v2.2 | 完全兼容Python 3.13 | 稳定可靠版本</p>
         <p style="font-size: 0.8rem;">© 2024 版权所有 | 包含SPC分析、异常检测、阶段分析</p>
     </div>
     """,
