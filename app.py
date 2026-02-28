@@ -5,10 +5,18 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from scipy import stats
 from scipy.stats import norm
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
+# 尝试不同的导入方式
+try:
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import LabelEncoder
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import mean_squared_error, r2_score
+except ImportError:
+    import sklearn
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import LabelEncoder
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import mean_squared_error, r2_score
 import warnings
 import io
 from datetime import datetime
