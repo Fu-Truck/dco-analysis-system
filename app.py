@@ -5,24 +5,13 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from scipy import stats
 from scipy.stats import norm
-# 尝试不同的导入方式
-try:
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.preprocessing import LabelEncoder
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import mean_squared_error, r2_score
-except ImportError:
-    import sklearn
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.preprocessing import LabelEncoder
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import mean_squared_error, r2_score
 import warnings
 import io
 from datetime import datetime
 import platform
 import tempfile
 import os
+import sys
 
 warnings.filterwarnings('ignore')
 
@@ -122,6 +111,39 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ==================== 尝试导入scikit-learn ====================
+try:
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import LabelEncoder
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import mean_squared_error, r2_score
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    st.warning("⚠️ scikit-learn 库未安装，随机森林分析功能将不可用。但这不影响批次数据分析功能。")
+    
+    # 创建虚拟类以避免导入错误
+    class RandomForestRegressor:
+        def __init__(self, **kwargs):
+            raise ImportError("scikit-learn not available")
+        def fit(self, X, y):
+            raise ImportError("scikit-learn not available")
+        def predict(self, X):
+            raise ImportError("scikit-learn not available")
+    
+    class LabelEncoder:
+        def fit_transform(self, x):
+            raise ImportError("scikit-learn not available")
+    
+    def train_test_split(*args, **kwargs):
+        raise ImportError("scikit-learn not available")
+    
+    def mean_squared_error(*args, **kwargs):
+        raise ImportError("scikit-learn not available")
+    
+    def r2_score(*args, **kwargs):
+        raise ImportError("scikit-learn not available")
+
 # ==================== 公用函数 ====================
 def set_chinese_font():
     """
@@ -151,6 +173,10 @@ st.markdown("---")
 with st.sidebar:
     st.markdown("## ⚙️ 控制面板")
     st.markdown("---")
+    
+    # 显示scikit-learn状态
+    if not SKLEARN_AVAILABLE:
+        st.warning("📌 注意：随机森林分析功能当前不可用，但批次数据分析功能正常。")
     
     # 文件上传区域
     st.markdown("### 📂 数据上传")
@@ -190,14 +216,15 @@ with st.sidebar:
         help="删除Time Elapsed大于此值的数据"
     )
     
-    rf_estimators = st.number_input(
-        "随机森林树数量",
-        min_value=50,
-        max_value=500,
-        value=100,
-        step=50,
-        help="随机森林模型中决策树的数量"
-    )
+    if SKLEARN_AVAILABLE:
+        rf_estimators = st.number_input(
+            "随机森林树数量",
+            min_value=50,
+            max_value=500,
+            value=100,
+            step=50,
+            help="随机森林模型中决策树的数量"
+        )
     
     show_details = st.checkbox(
         "显示详细统计信息",
@@ -221,7 +248,7 @@ with st.sidebar:
         "   - SPC控制图分析\n"
         "   - 异常点检测\n"
         "   - 活动数据清洗\n"
-        "   - 随机森林特征分析\n"
+        "   - 随机森林特征分析（如可用）\n"
         "   - 阶段详细分析"
     )
 
@@ -619,7 +646,6 @@ def analyze_activity_data(df, rf_estimators=100):
     """
     results = {
         'cleaning_steps': [],
-        'feature_importance': None,
         'phase_analysis': {},
         'figures': {}
     }
@@ -649,138 +675,144 @@ def analyze_activity_data(df, rf_estimators=100):
     
     results['cleaning_steps'].append(f"\n清洗完成，最终数据行数: {len(df)}")
     
-    # ========== 随机森林回归分析 ==========
-    # 检查必要的列是否存在
-    required_columns = ['PO Number', 'Actual Duration (minutes)', 'Task Description', 
-                        'Position', 'Operator', 'Area', 'Phase Name', 'Created At']
-    
-    missing_columns = [col for col in required_columns if col not in df.columns]
-    if missing_columns:
-        results['error'] = f"缺少必要列: {missing_columns}"
-        return results
-    
-    # 按时间排序，只分析最新的100个批次
-    df['Created At'] = pd.to_datetime(df['Created At'])
-    batch_latest_time = df.groupby('PO Number')['Created At'].max().reset_index()
-    batch_latest_time = batch_latest_time.sort_values('Created At', ascending=False)
-    latest_100_batches = batch_latest_time.head(100)['PO Number'].tolist()
-    
-    df_filtered = df[df['PO Number'].isin(latest_100_batches)].copy()
-    results['batch_info'] = {
-        'total_batches': df['PO Number'].nunique(),
-        'analyzed_batches': len(latest_100_batches),
-        'analyzed_records': len(df_filtered),
-        'time_range': f"{df_filtered['Created At'].min()} 至 {df_filtered['Created At'].max()}"
-    }
-    
-    df_rf = df_filtered
-    
-    # 创建特征矩阵
-    features = pd.DataFrame()
-    
-    # 1. 从PO Number提取产品型号
-    df_rf['Product_Type'] = df_rf['PO Number'].astype(str).str[:4]
-    features['Product_Type'] = df_rf['Product_Type']
-    
-    # 2. 产线编号
-    features['Area'] = df_rf['Area']
-    
-    # 3. 活动描述
-    features['Task_Description'] = df_rf['Task Description']
-    
-    # 4. 执行角色
-    features['Position'] = df_rf['Position']
-    
-    # 5. 执行人员
-    features['Operator'] = df_rf['Operator'].astype(str)
-    
-    # 6. 阶段名称
-    features['Phase_Name'] = df_rf['Phase Name']
-    
-    # 目标变量
-    target = df_rf['Actual Duration (minutes)']
-    
-    # 对分类特征进行编码
-    label_encoders = {}
-    features_encoded = pd.DataFrame()
-    
-    for column in features.columns:
-        if features[column].dtype == 'object' or features[column].dtype.name == 'category':
-            le = LabelEncoder()
-            features_clean = features[column].fillna('Unknown').astype(str)
-            features_encoded[column] = le.fit_transform(features_clean)
-            label_encoders[column] = le
-        else:
-            features_encoded[column] = features[column]
-    
-    # 处理目标变量的缺失值
-    target = target.fillna(target.mean())
-    
-    # 分割训练集和测试集
-    X_train, X_test, y_train, y_test = train_test_split(
-        features_encoded, target, test_size=0.2, random_state=42
-    )
-    
-    # 训练随机森林模型
-    rf_model = RandomForestRegressor(
-        n_estimators=rf_estimators,
-        max_depth=10,
-        random_state=42,
-        n_jobs=-1
-    )
-    
-    rf_model.fit(X_train, y_train)
-    
-    # 模型评估
-    y_pred = rf_model.predict(X_test)
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-    
-    results['model_metrics'] = {
-        'mse': mse,
-        'r2': r2,
-        'rmse': np.sqrt(mse)
-    }
-    
-    # 特征重要性分析
-    feature_importance = pd.DataFrame({
-        '特征': features.columns,
-        '重要性': rf_model.feature_importances_,
-        '重要性百分比': rf_model.feature_importances_ * 100
-    })
-    
-    feature_importance = feature_importance.sort_values('重要性', ascending=False)
-    results['feature_importance'] = feature_importance
-    
-    # 可视化特征重要性
-    set_chinese_font()
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    sorted_data = feature_importance.sort_values('重要性', ascending=True)
-    bars = ax.barh(range(len(sorted_data)), sorted_data['重要性'])
-    colors = plt.cm.RdYlGn_r(sorted_data['重要性'] / sorted_data['重要性'].max())
-    for bar, color in zip(bars, colors):
-        bar.set_color(color)
-    
-    for i, (bar, val) in enumerate(zip(bars, sorted_data['重要性'])):
-        ax.text(bar.get_width() + 0.001, bar.get_y() + bar.get_height()/2,
-                f'{val:.4f} ({val*100:.1f}%)', 
-                ha='left', va='center', fontsize=9)
-    
-    ax.set_yticks(range(len(sorted_data)))
-    ax.set_yticklabels(sorted_data['特征'])
-    ax.set_xlabel('特征重要性', fontsize=11)
-    ax.set_title('随机森林特征重要性分析（最新100个批次）', fontsize=12, fontweight='bold')
-    ax.grid(axis='x', alpha=0.3)
-    
-    plt.tight_layout()
-    results['figures']['feature_importance'] = fig
+    # ========== 随机森林回归分析（如果可用） ==========
+    if SKLEARN_AVAILABLE:
+        try:
+            # 检查必要的列是否存在
+            required_columns = ['PO Number', 'Actual Duration (minutes)', 'Task Description', 
+                                'Position', 'Operator', 'Area', 'Phase Name', 'Created At']
+            
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                results['warning'] = f"缺少必要列: {missing_columns}，跳过随机森林分析"
+            else:
+                # 按时间排序，只分析最新的100个批次
+                df['Created At'] = pd.to_datetime(df['Created At'])
+                batch_latest_time = df.groupby('PO Number')['Created At'].max().reset_index()
+                batch_latest_time = batch_latest_time.sort_values('Created At', ascending=False)
+                latest_100_batches = batch_latest_time.head(100)['PO Number'].tolist()
+                
+                df_filtered = df[df['PO Number'].isin(latest_100_batches)].copy()
+                results['batch_info'] = {
+                    'total_batches': df['PO Number'].nunique(),
+                    'analyzed_batches': len(latest_100_batches),
+                    'analyzed_records': len(df_filtered),
+                    'time_range': f"{df_filtered['Created At'].min()} 至 {df_filtered['Created At'].max()}"
+                }
+                
+                df_rf = df_filtered
+                
+                # 创建特征矩阵
+                features = pd.DataFrame()
+                
+                # 1. 从PO Number提取产品型号
+                df_rf['Product_Type'] = df_rf['PO Number'].astype(str).str[:4]
+                features['Product_Type'] = df_rf['Product_Type']
+                
+                # 2. 产线编号
+                features['Area'] = df_rf['Area']
+                
+                # 3. 活动描述
+                features['Task_Description'] = df_rf['Task Description']
+                
+                # 4. 执行角色
+                features['Position'] = df_rf['Position']
+                
+                # 5. 执行人员
+                features['Operator'] = df_rf['Operator'].astype(str)
+                
+                # 6. 阶段名称
+                features['Phase_Name'] = df_rf['Phase Name']
+                
+                # 目标变量
+                target = df_rf['Actual Duration (minutes)']
+                
+                # 对分类特征进行编码
+                label_encoders = {}
+                features_encoded = pd.DataFrame()
+                
+                for column in features.columns:
+                    if features[column].dtype == 'object' or features[column].dtype.name == 'category':
+                        le = LabelEncoder()
+                        features_clean = features[column].fillna('Unknown').astype(str)
+                        features_encoded[column] = le.fit_transform(features_clean)
+                        label_encoders[column] = le
+                    else:
+                        features_encoded[column] = features[column]
+                
+                # 处理目标变量的缺失值
+                target = target.fillna(target.mean())
+                
+                # 分割训练集和测试集
+                X_train, X_test, y_train, y_test = train_test_split(
+                    features_encoded, target, test_size=0.2, random_state=42
+                )
+                
+                # 训练随机森林模型
+                rf_model = RandomForestRegressor(
+                    n_estimators=rf_estimators,
+                    max_depth=10,
+                    random_state=42,
+                    n_jobs=-1
+                )
+                
+                rf_model.fit(X_train, y_train)
+                
+                # 模型评估
+                y_pred = rf_model.predict(X_test)
+                mse = mean_squared_error(y_test, y_pred)
+                r2 = r2_score(y_test, y_pred)
+                
+                results['model_metrics'] = {
+                    'mse': mse,
+                    'r2': r2,
+                    'rmse': np.sqrt(mse)
+                }
+                
+                # 特征重要性分析
+                feature_importance = pd.DataFrame({
+                    '特征': features.columns,
+                    '重要性': rf_model.feature_importances_,
+                    '重要性百分比': rf_model.feature_importances_ * 100
+                })
+                
+                feature_importance = feature_importance.sort_values('重要性', ascending=False)
+                results['feature_importance'] = feature_importance
+                
+                # 可视化特征重要性
+                set_chinese_font()
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                sorted_data = feature_importance.sort_values('重要性', ascending=True)
+                bars = ax.barh(range(len(sorted_data)), sorted_data['重要性'])
+                colors = plt.cm.RdYlGn_r(sorted_data['重要性'] / sorted_data['重要性'].max())
+                for bar, color in zip(bars, colors):
+                    bar.set_color(color)
+                
+                for i, (bar, val) in enumerate(zip(bars, sorted_data['重要性'])):
+                    ax.text(bar.get_width() + 0.001, bar.get_y() + bar.get_height()/2,
+                            f'{val:.4f} ({val*100:.1f}%)', 
+                            ha='left', va='center', fontsize=9)
+                
+                ax.set_yticks(range(len(sorted_data)))
+                ax.set_yticklabels(sorted_data['特征'])
+                ax.set_xlabel('特征重要性', fontsize=11)
+                ax.set_title('随机森林特征重要性分析（最新100个批次）', fontsize=12, fontweight='bold')
+                ax.grid(axis='x', alpha=0.3)
+                
+                plt.tight_layout()
+                results['figures']['feature_importance'] = fig
+                
+        except Exception as e:
+            results['warning'] = f"随机森林分析失败: {str(e)}"
+    else:
+        results['warning'] = "scikit-learn未安装，跳过随机森林分析"
     
     # ========== 阶段详细分析 ==========
     phases = ['清场前准备', '清场', '切换', '产线配置']
     
     for phase in phases:
-        phase_data = df_rf[df_rf['Phase Name'] == phase]
+        phase_data = df[df['Phase Name'] == phase]
         
         if len(phase_data) == 0:
             continue
@@ -825,7 +857,8 @@ if run_button:
             batch_df = pd.read_excel(batch_file)
             
             # 执行批次数据分析
-            batch_results = analyze_batch_data(batch_df, analysis_points, time_threshold)
+            with st.spinner("正在执行批次数据分析..."):
+                batch_results = analyze_batch_data(batch_df, analysis_points, time_threshold)
             
             if batch_results:
                 # 显示批次分析结果
@@ -910,10 +943,15 @@ if run_button:
             activity_df = pd.read_excel(activity_file)
             
             # 执行活动数据分析
-            activity_results = analyze_activity_data(activity_df, rf_estimators)
+            with st.spinner("正在执行活动数据分析..."):
+                activity_results = analyze_activity_data(activity_df, rf_estimators if SKLEARN_AVAILABLE else 100)
             
-            if activity_results and 'error' not in activity_results:
+            if activity_results:
                 st.markdown('<h2 class="sub-header">📋 活动数据分析结果</h2>', unsafe_allow_html=True)
+                
+                # 如果有警告信息，显示出来
+                if 'warning' in activity_results:
+                    st.warning(activity_results['warning'])
                 
                 # 创建选项卡
                 activity_tab1, activity_tab2, activity_tab3 = st.tabs(["数据清洗", "特征重要性", "阶段分析"])
@@ -974,6 +1012,8 @@ if run_button:
                             f"(重要性: {top_feature['重要性百分比']:.2f}%)\n\n"
                             f"**建议**: {suggestions.get(top_feature['特征'], '根据重要性最高的特征进行优化')}"
                         )
+                    else:
+                        st.info("随机森林分析不可用或未执行，无法显示特征重要性")
                 
                 with activity_tab3:
                     if activity_results['phase_analysis']:
@@ -1065,9 +1105,6 @@ else:
             <span style="background-color: #EFF6FF; padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem;">
                 ⏱️ 阶段分析
             </span>
-            <span style="background-color: #EFF6FF; padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem;">
-                🤖 随机森林
-            </span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -1088,7 +1125,7 @@ else:
     with col_func2:
         st.markdown("""
         #### 📋 活动分析功能
-        - 随机森林回归分析
+        - 随机森林回归分析（如可用）
         - 特征重要性排序
         - 阶段耗时对比
         - 人员效率分析
@@ -1111,7 +1148,7 @@ st.markdown(
     """
     <div style="text-align: center; color: #6B7280; padding: 1rem;">
         <p>DCO综合分析系统 v2.0 | 基于Streamlit构建 | 数据驱动决策支持</p>
-        <p style="font-size: 0.8rem;">© 2024 版权所有 | 包含SPC分析、异常检测、随机森林特征分析</p>
+        <p style="font-size: 0.8rem;">© 2024 版权所有</p>
     </div>
     """,
     unsafe_allow_html=True
