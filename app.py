@@ -111,9 +111,30 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== 设置sklearn不可用标志 ====================
-# 由于我们完全移除了sklearn依赖，直接设置为False
-SKLEARN_AVAILABLE = False
+# ==================== 设置中文字体函数（修复问题一）====================
+def set_chinese_font():
+    """
+    设置matplotlib支持中文显示
+    """
+    system = platform.system()
+    
+    try:
+        if system == "Windows":
+            plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
+        elif system == "Darwin":  # macOS
+            plt.rcParams['font.sans-serif'] = ['PingFang SC', 'STHeiti', 'Arial Unicode MS']
+        else:  # Linux (Streamlit Cloud)
+            # Streamlit Cloud 使用 Linux，需要特殊处理
+            plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS', 'WenQuanYi Zen Hei']
+        
+        plt.rcParams['axes.unicode_minus'] = False
+        return True
+    except Exception as e:
+        print(f"设置中文字体时出错：{e}")
+        return False
+
+# 初始化字体
+set_chinese_font()
 
 # ==================== 标题区域 ====================
 st.markdown('<h1 class="main-header">📊 DCO综合分析系统</h1>', unsafe_allow_html=True)
@@ -125,7 +146,7 @@ with st.sidebar:
     st.markdown("---")
     
     # 显示提示信息
-    st.info("📌 当前版本：批次分析 + 活动分析（不含机器学习）")
+    st.info("📌 当前版本：完整统计分析与SPC控制")
     
     # 文件上传区域
     st.markdown("### 📂 数据上传")
@@ -184,16 +205,16 @@ with st.sidebar:
         "3. 点击'开始全面分析'按钮\n"
         "4. 系统将执行：\n"
         "   - 批次数据清洗\n"
-        "   - SPC控制图分析\n"
-        "   - 异常点检测\n"
-        "   - 活动数据清洗\n"
-        "   - 阶段详细分析"
+        "   - SPC控制图分析（含异常点标记）\n"
+        "   - 完整统计分析（均值、中位数、众数、分位数）\n"
+        "   - 正态分布拟合\n"
+        "   - 活动数据分析（最大值、最小值）"
     )
 
 # ==================== 批次数据分析函数 ====================
 def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     """
-    批次数据分析：数据清洗、SPC分析、异常检测
+    批次数据分析：数据清洗、SPC分析、异常检测、完整统计分析
     """
     results = {
         'cleaning_steps': [],
@@ -247,7 +268,7 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     results['cleaning_steps'].append(f"\n清洗完成，最终数据行数: {len(df)}")
     results['cleaning_steps'].append(f"共删除了 {original_rows - len(df)} 行数据")
     
-    # ========== SPC分析 ==========
+    # ========== SPC分析准备 ==========
     # 确保日期列是datetime类型
     df['End date/time'] = pd.to_datetime(df['End date/time'])
     
@@ -278,7 +299,7 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     target_values = df_sorted[target_column].values
     n_points = len(data_values)
     
-    # ========== 统计计算 ==========
+    # ========== 完整统计计算（修复问题二）==========
     overall_mean = np.mean(data_values)
     overall_median = np.median(data_values)
     overall_std = np.std(data_values, ddof=1)
@@ -288,12 +309,17 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     overall_mode = overall_mode_result.mode[0]
     overall_mode_count = overall_mode_result.count[0]
     
-    # 计算分位数
+    # 计算分位数（修复问题二：前/后十分位，前/后四分位）
     sorted_data = np.sort(data_values)
     front_10_percentile = np.percentile(sorted_data, 10)
     back_10_percentile = np.percentile(sorted_data, 90)
     front_25_percentile = np.percentile(sorted_data, 25)
     back_25_percentile = np.percentile(sorted_data, 75)
+    
+    # 计算最大值和最小值（新增）
+    min_value = np.min(data_values)
+    max_value = np.max(data_values)
+    range_value = max_value - min_value
     
     # 目标值统计
     target_mean = np.mean(target_values)
@@ -332,7 +358,7 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     
     cp = (usl - lsl) / (6 * overall_std) if overall_std > 0 else 0
     
-    # 保存统计结果
+    # 保存统计结果（包含所有新增指标）
     results['statistics'] = {
         'n_points': n_points,
         'overall_mean': overall_mean,
@@ -344,6 +370,9 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
         'back_10_percentile': back_10_percentile,
         'front_25_percentile': front_25_percentile,
         'back_25_percentile': back_25_percentile,
+        'min_value': min_value,
+        'max_value': max_value,
+        'range_value': range_value,
         'target_mean': target_mean,
         'ucl': ucl,
         'lcl': lcl,
@@ -363,15 +392,12 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
         'lsl': lsl,
         'cp': cp,
         'cpk': cpk,
-        'ppk': ppk,
-        'min_value': np.min(data_values),
-        'max_value': np.max(data_values),
-        'range_value': np.max(data_values) - np.min(data_values)
+        'ppk': ppk
     }
     
-    # ========== 创建SPC图 ==========
+    # ========== 创建SPC图（修复问题一：中文显示和异常点标记）==========
     set_chinese_font()
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={'height_ratios': [3, 1]})
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12), gridspec_kw={'height_ratios': [3, 1]})
     
     x_values = range(len(data_values))
     n_front_10 = max(1, int(n_points * 0.1))
@@ -392,68 +418,25 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     ax1.axhline(y=overall_median, color='darkgreen', linestyle='--', linewidth=1.5, alpha=0.7, label=f'整体中位数: {overall_median:.2f}')
     ax1.axhline(y=overall_mode, color='darkorange', linestyle='--', linewidth=1.5, alpha=0.7, label=f'整体众数: {overall_mode:.2f}')
     ax1.axhline(y=target_mean, color='purple', linestyle='-.', linewidth=2, label=f'目标均值: {target_mean:.2f}')
-    ax1.axhline(y=ucl, color='red', linestyle='--', linewidth=2, label=f'UCL: {ucl:.2f}')
-    ax1.axhline(y=lcl, color='red', linestyle='--', linewidth=2, label=f'LCL: {lcl:.2f}')
-    ax1.axhline(y=uwl, color='orange', linestyle=':', linewidth=2, label=f'UWL: {uwl:.2f}')
-    ax1.axhline(y=lwl, color='orange', linestyle=':', linewidth=2, label=f'LWL: {lwl:.2f}')
-    ax1.axhline(y=usl, color='darkred', linestyle='-', linewidth=1.5, label=f'USL: {usl:.2f}')
-    ax1.axhline(y=lsl, color='darkred', linestyle='-', linewidth=1.5, label=f'LSL: {lsl:.2f}')
+    ax1.axhline(y=ucl, color='red', linestyle='--', linewidth=2, label=f'UCL (目标+20%): {ucl:.2f}')
+    ax1.axhline(y=lcl, color='red', linestyle='--', linewidth=2, label=f'LCL (目标-20%): {lcl:.2f}')
+    ax1.axhline(y=uwl, color='orange', linestyle=':', linewidth=2, label=f'UWL (目标+50%): {uwl:.2f}')
+    ax1.axhline(y=lwl, color='orange', linestyle=':', linewidth=2, label=f'LWL (目标-50%): {lwl:.2f}')
+    ax1.axhline(y=usl, color='darkred', linestyle='-', linewidth=1.5, label=f'USL (上规格限): {usl:.2f}')
+    ax1.axhline(y=lsl, color='darkred', linestyle='-', linewidth=1.5, label=f'LSL (下规格限): {lsl:.2f}')
     
     # 标记前后10%区域
-    ax1.axvspan(0, n_front_10-1, alpha=0.1, color='lightblue', label=f'前10%数据')
-    ax1.axvspan(n_points - n_back_10, n_points-1, alpha=0.1, color='lightcoral', label=f'后10%数据')
+    ax1.axvspan(0, n_front_10-1, alpha=0.1, color='lightblue', label=f'前10%数据 (第1-{n_front_10}点)')
+    ax1.axvspan(n_points - n_back_10, n_points-1, alpha=0.1, color='lightcoral', label=f'后10%数据 (第{n_points - n_back_10 + 1}-{n_points}点)')
     
-    ax1.set_ylim(bottom=0, top=min(300, max(data_values) * 1.2))
-    ax1.set_xlabel('数据点序号 (按时间排序)', fontsize=11)
-    ax1.set_ylabel('Time Elapsed (minutes)', fontsize=11)
-    ax1.set_title('SPC控制图 - 基于目标值百分比的控制限', fontsize=12, fontweight='bold')
-    ax1.legend(loc='upper right', fontsize=7, ncol=2)
-    ax1.grid(True, alpha=0.3)
-    
-    # 设置x轴标签
-    if len(x_values) <= 20:
-        xtick_labels = [d.strftime('%m-%d %H:%M') for d in df_sorted['End date/time']]
-        ax1.set_xticks(x_values)
-        ax1.set_xticklabels(xtick_labels, rotation=45, ha='right', fontsize=8)
-    else:
-        step = len(x_values) // 10
-        xtick_positions = x_values[::step]
-        xtick_labels = [df_sorted['End date/time'].iloc[i].strftime('%m-%d %H:%M') for i in xtick_positions]
-        ax1.set_xticks(xtick_positions)
-        ax1.set_xticklabels(xtick_labels, rotation=45, ha='right', fontsize=8)
-    
-    # 下部：过程能力分析图表
-    ax2.hist(data_values, bins=20, density=True, alpha=0.7, color='skyblue', edgecolor='black', label='实际值分布')
-    x_norm = np.linspace(max(0, min(data_values)), max(data_values), 100)
-    y_norm = norm.pdf(x_norm, overall_mean, std_total)
-    ax2.plot(x_norm, y_norm, 'r-', linewidth=2, label='正态分布拟合')
-    
-    # 标记规格限和统计量
-    ax2.axvline(x=usl, color='darkred', linestyle='--', linewidth=2, label=f'USL: {usl:.2f}')
-    ax2.axvline(x=lsl, color='darkred', linestyle='--', linewidth=2, label=f'LSL: {lsl:.2f}')
-    ax2.axvline(x=target_mean, color='purple', linestyle='-.', linewidth=2, label=f'目标: {target_mean:.2f}')
-    ax2.axvline(x=overall_mean, color='black', linestyle='-', linewidth=2, label=f'均值: {overall_mean:.2f}')
-    ax2.axvline(x=overall_median, color='darkgreen', linestyle='--', linewidth=1.5, alpha=0.7, label=f'中位数: {overall_median:.2f}')
-    ax2.axvline(x=overall_mode, color='darkorange', linestyle='--', linewidth=1.5, alpha=0.7, label=f'众数: {overall_mode:.2f}')
-    ax2.axvline(x=front_10_percentile, color='blue', linestyle=':', linewidth=1.5, alpha=0.7, label=f'前10%分位: {front_10_percentile:.2f}')
-    ax2.axvline(x=back_10_percentile, color='red', linestyle=':', linewidth=1.5, alpha=0.7, label=f'后10%分位: {back_10_percentile:.2f}')
-    ax2.axvline(x=front_25_percentile, color='lightblue', linestyle=':', linewidth=1.5, alpha=0.7, label=f'前25%分位: {front_25_percentile:.2f}')
-    ax2.axvline(x=back_25_percentile, color='lightcoral', linestyle=':', linewidth=1.5, alpha=0.7, label=f'后25%分位: {back_25_percentile:.2f}')
-    
-    ax2.set_xlim(left=0, right=min(300, max(data_values) * 1.2))
-    ax2.set_xlabel('Time Elapsed (minutes)', fontsize=11)
-    ax2.set_ylabel('概率密度', fontsize=11)
-    ax2.set_title('过程能力与统计分布分析', fontsize=12, fontweight='bold')
-    ax2.legend(loc='upper left', fontsize=7)
-    ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    results['figures']['spc_chart'] = fig
-    
-    # ========== 异常点检测 ==========
+    # ========== 异常点检测和标记（修复问题一：异常点标记）==========
     anomaly_records = []
+    rule1_indices = []
+    rule2_indices = []
+    rule3_indices = []
+    rule4_indices = []
     
-    # 规则1: 一个点落在A区以外
+    # 规则1: 一个点落在A区以外（超出UCL/LCL）
     for i, value in enumerate(data_values):
         if value > ucl or value < lcl:
             rule = "规则1: 点落在A区以外"
@@ -470,6 +453,9 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
                 '偏差': round(value - target_values[i], 2),
                 '异常规则': rule
             })
+            rule1_indices.append(i)
+            # 在图上标记异常点（红色圆圈）
+            ax1.plot(i, value, 'ro', markersize=10, markeredgecolor='black', markeredgewidth=1.5, label='规则1异常点' if i == rule1_indices[0] else "")
     
     # 规则2: 连续9个点落在中心线的同一侧
     def check_consecutive_on_one_side(data, target, n=9):
@@ -486,20 +472,23 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     
     rule2_anomalies = check_consecutive_on_one_side(data_values, target_mean, 9)
     for idx in rule2_anomalies:
-        rule = "规则2: 连续9个点在目标线同一侧"
-        location = df_sorted.iloc[idx]['Location'] if 'Location' in df_sorted.columns else '未知'
-        process_id = df_sorted.iloc[idx]['Process Order ID'] if 'Process Order ID' in df_sorted.columns else '未知'
-        date_time = df_sorted.iloc[idx]['End date/time'] if 'End date/time' in df_sorted.columns else '未知'
-        anomaly_records.append({
-            '序号': idx+1,
-            '产线': location,
-            '批次号': process_id,
-            '时间': date_time,
-            '实际值': round(data_values[idx], 2),
-            '目标值': round(target_values[idx], 2),
-            '偏差': round(data_values[idx] - target_values[idx], 2),
-            '异常规则': rule
-        })
+        if idx not in [a['序号']-1 for a in anomaly_records]:  # 避免重复
+            rule = "规则2: 连续9个点在目标线同一侧"
+            location = df_sorted.iloc[idx]['Location'] if 'Location' in df_sorted.columns else '未知'
+            process_id = df_sorted.iloc[idx]['Process Order ID'] if 'Process Order ID' in df_sorted.columns else '未知'
+            date_time = df_sorted.iloc[idx]['End date/time'] if 'End date/time' in df_sorted.columns else '未知'
+            anomaly_records.append({
+                '序号': idx+1,
+                '产线': location,
+                '批次号': process_id,
+                '时间': date_time,
+                '实际值': round(data_values[idx], 2),
+                '目标值': round(target_values[idx], 2),
+                '偏差': round(data_values[idx] - target_values[idx], 2),
+                '异常规则': rule
+            })
+            rule2_indices.append(idx)
+            ax1.plot(idx, data_values[idx], 'yo', markersize=10, markeredgecolor='black', markeredgewidth=1.5, label='规则2异常点' if idx == rule2_anomalies[0] else "")
     
     # 规则3: 连续6个点递增或递减
     def check_trend(data, n=6):
@@ -516,20 +505,23 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     
     rule3_anomalies = check_trend(data_values, 6)
     for idx in rule3_anomalies:
-        rule = "规则3: 连续6个点递增或递减"
-        location = df_sorted.iloc[idx]['Location'] if 'Location' in df_sorted.columns else '未知'
-        process_id = df_sorted.iloc[idx]['Process Order ID'] if 'Process Order ID' in df_sorted.columns else '未知'
-        date_time = df_sorted.iloc[idx]['End date/time'] if 'End date/time' in df_sorted.columns else '未知'
-        anomaly_records.append({
-            '序号': idx+1,
-            '产线': location,
-            '批次号': process_id,
-            '时间': date_time,
-            '实际值': round(data_values[idx], 2),
-            '目标值': round(target_values[idx], 2),
-            '偏差': round(data_values[idx] - target_values[idx], 2),
-            '异常规则': rule
-        })
+        if idx not in [a['序号']-1 for a in anomaly_records]:  # 避免重复
+            rule = "规则3: 连续6个点递增或递减"
+            location = df_sorted.iloc[idx]['Location'] if 'Location' in df_sorted.columns else '未知'
+            process_id = df_sorted.iloc[idx]['Process Order ID'] if 'Process Order ID' in df_sorted.columns else '未知'
+            date_time = df_sorted.iloc[idx]['End date/time'] if 'End date/time' in df_sorted.columns else '未知'
+            anomaly_records.append({
+                '序号': idx+1,
+                '产线': location,
+                '批次号': process_id,
+                '时间': date_time,
+                '实际值': round(data_values[idx], 2),
+                '目标值': round(target_values[idx], 2),
+                '偏差': round(data_values[idx] - target_values[idx], 2),
+                '异常规则': rule
+            })
+            rule3_indices.append(idx)
+            ax1.plot(idx, data_values[idx], 'go', markersize=10, markeredgecolor='black', markeredgewidth=1.5, label='规则3异常点' if idx == rule3_anomalies[0] else "")
     
     # 规则4: 连续14个点中相邻点交替上下
     def check_alternating(data, n=14):
@@ -553,20 +545,78 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     
     rule4_anomalies = check_alternating(data_values, 14)
     for idx in rule4_anomalies:
-        rule = "规则4: 连续14个点相邻点交替上下"
-        location = df_sorted.iloc[idx]['Location'] if 'Location' in df_sorted.columns else '未知'
-        process_id = df_sorted.iloc[idx]['Process Order ID'] if 'Process Order ID' in df_sorted.columns else '未知'
-        date_time = df_sorted.iloc[idx]['End date/time'] if 'End date/time' in df_sorted.columns else '未知'
-        anomaly_records.append({
-            '序号': idx+1,
-            '产线': location,
-            '批次号': process_id,
-            '时间': date_time,
-            '实际值': round(data_values[idx], 2),
-            '目标值': round(target_values[idx], 2),
-            '偏差': round(data_values[idx] - target_values[idx], 2),
-            '异常规则': rule
-        })
+        if idx not in [a['序号']-1 for a in anomaly_records]:  # 避免重复
+            rule = "规则4: 连续14个点相邻点交替上下"
+            location = df_sorted.iloc[idx]['Location'] if 'Location' in df_sorted.columns else '未知'
+            process_id = df_sorted.iloc[idx]['Process Order ID'] if 'Process Order ID' in df_sorted.columns else '未知'
+            date_time = df_sorted.iloc[idx]['End date/time'] if 'End date/time' in df_sorted.columns else '未知'
+            anomaly_records.append({
+                '序号': idx+1,
+                '产线': location,
+                '批次号': process_id,
+                '时间': date_time,
+                '实际值': round(data_values[idx], 2),
+                '目标值': round(target_values[idx], 2),
+                '偏差': round(data_values[idx] - target_values[idx], 2),
+                '异常规则': rule
+            })
+            rule4_indices.append(idx)
+            ax1.plot(idx, data_values[idx], 'mo', markersize=10, markeredgecolor='black', markeredgewidth=1.5, label='规则4异常点' if idx == rule4_anomalies[0] else "")
+    
+    # 设置图表属性
+    ax1.set_ylim(bottom=0, top=min(300, max(data_values) * 1.2))
+    ax1.set_xlabel('数据点序号 (按时间排序)', fontsize=12)
+    ax1.set_ylabel('时间 (分钟)', fontsize=12)
+    ax1.set_title('SPC控制图 - 基于目标值百分比的控制限', fontsize=14, fontweight='bold')
+    
+    # 处理图例重复问题
+    handles, labels = ax1.get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    ax1.legend(by_label.values(), by_label.keys(), loc='upper right', fontsize=8, ncol=2)
+    
+    ax1.grid(True, alpha=0.3)
+    
+    # 设置x轴标签
+    if len(x_values) <= 20:
+        xtick_labels = [d.strftime('%m-%d %H:%M') for d in df_sorted['End date/time']]
+        ax1.set_xticks(x_values)
+        ax1.set_xticklabels(xtick_labels, rotation=45, ha='right', fontsize=8)
+    else:
+        step = len(x_values) // 10
+        xtick_positions = x_values[::step]
+        xtick_labels = [df_sorted['End date/time'].iloc[i].strftime('%m-%d %H:%M') for i in xtick_positions]
+        ax1.set_xticks(xtick_positions)
+        ax1.set_xticklabels(xtick_labels, rotation=45, ha='right', fontsize=8)
+    
+    # 下部：过程能力分析图表（包含正态分布图 - 修复问题二）
+    ax2.hist(data_values, bins=20, density=True, alpha=0.7, color='skyblue', edgecolor='black', label='实际值分布')
+    x_norm = np.linspace(max(0, min(data_values)), max(data_values), 100)
+    y_norm = norm.pdf(x_norm, overall_mean, std_total)
+    ax2.plot(x_norm, y_norm, 'r-', linewidth=2, label='正态分布拟合')
+    
+    # 标记规格限和统计量
+    ax2.axvline(x=usl, color='darkred', linestyle='--', linewidth=2, label=f'USL: {usl:.2f}')
+    ax2.axvline(x=lsl, color='darkred', linestyle='--', linewidth=2, label=f'LSL: {lsl:.2f}')
+    ax2.axvline(x=target_mean, color='purple', linestyle='-.', linewidth=2, label=f'目标: {target_mean:.2f}')
+    ax2.axvline(x=overall_mean, color='black', linestyle='-', linewidth=2, label=f'均值: {overall_mean:.2f}')
+    ax2.axvline(x=overall_median, color='darkgreen', linestyle='--', linewidth=1.5, alpha=0.7, label=f'中位数: {overall_median:.2f}')
+    ax2.axvline(x=overall_mode, color='darkorange', linestyle='--', linewidth=1.5, alpha=0.7, label=f'众数: {overall_mode:.2f}')
+    
+    # 标记分位点（新增 - 修复问题二）
+    ax2.axvline(x=front_10_percentile, color='blue', linestyle=':', linewidth=1.5, alpha=0.7, label=f'前10%分位: {front_10_percentile:.2f}')
+    ax2.axvline(x=back_10_percentile, color='red', linestyle=':', linewidth=1.5, alpha=0.7, label=f'后10%分位: {back_10_percentile:.2f}')
+    ax2.axvline(x=front_25_percentile, color='lightblue', linestyle=':', linewidth=1.5, alpha=0.7, label=f'前25%分位: {front_25_percentile:.2f}')
+    ax2.axvline(x=back_25_percentile, color='lightcoral', linestyle=':', linewidth=1.5, alpha=0.7, label=f'后75%分位: {back_25_percentile:.2f}')
+    
+    ax2.set_xlim(left=0, right=min(300, max(data_values) * 1.2))
+    ax2.set_xlabel('时间 (分钟)', fontsize=12)
+    ax2.set_ylabel('概率密度', fontsize=12)
+    ax2.set_title('过程能力与统计分布分析', fontsize=14, fontweight='bold')
+    ax2.legend(loc='upper left', fontsize=8)
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    results['figures']['spc_chart'] = fig
     
     # 创建异常点DataFrame并去重
     if anomaly_records:
@@ -577,10 +627,10 @@ def analyze_batch_data(df, analysis_points=100, time_threshold=10800):
     
     return results
 
-# ==================== 活动数据分析函数（无机器学习版本）====================
+# ==================== 活动数据分析函数（修复问题三：最大值和最小值分析）====================
 def analyze_activity_data(df):
     """
-    活动数据分析：数据清洗、阶段分析（无随机森林）
+    活动数据分析：数据清洗、阶段分析（最大值、最小值分析）
     """
     results = {
         'cleaning_steps': [],
@@ -625,7 +675,7 @@ def analyze_activity_data(df):
             df['Created At'] = pd.to_datetime(df['Created At'])
             results['batch_info']['time_range'] = f"{df['Created At'].min()} 至 {df['Created At'].max()}"
     
-    # ========== 阶段详细分析 ==========
+    # ========== 阶段详细分析（修复问题三：删除总耗时，添加最大值和最小值）==========
     phases = ['清场前准备', '清场', '切换', '产线配置']
     
     for phase in phases:
@@ -634,51 +684,60 @@ def analyze_activity_data(df):
         if len(phase_data) == 0:
             continue
         
-        total_duration = phase_data['Actual Duration (minutes)'].sum()
+        # 基础统计
         avg_duration = phase_data['Actual Duration (minutes)'].mean()
+        min_duration = phase_data['Actual Duration (minutes)'].min()  # 新增最小值
+        max_duration = phase_data['Actual Duration (minutes)'].max()  # 新增最大值
+        std_duration = phase_data['Actual Duration (minutes)'].std()  # 新增标准差
         
         # 按活动描述分组
-        activity_duration = phase_data.groupby('Task Description')['Actual Duration (minutes)'].agg(['mean', 'sum', 'count']).round(2)
+        activity_duration = phase_data.groupby('Task Description')['Actual Duration (minutes)'].agg(['mean', 'min', 'max', 'count']).round(2)
         activity_duration = activity_duration.sort_values('mean', ascending=False)
         
         # 按执行人员分组
         if 'Operator' in phase_data.columns:
-            operator_duration = phase_data.groupby('Operator')['Actual Duration (minutes)'].agg(['mean', 'count']).round(2)
+            operator_duration = phase_data.groupby('Operator')['Actual Duration (minutes)'].agg(['mean', 'min', 'max', 'count']).round(2)
             operator_duration = operator_duration.sort_values('mean')
         else:
             operator_duration = pd.DataFrame()
         
+        # 找出最快的和最慢的记录
+        fastest_record = phase_data.loc[phase_data['Actual Duration (minutes)'].idxmin()] if len(phase_data) > 0 else None
+        slowest_record = phase_data.loc[phase_data['Actual Duration (minutes)'].idxmax()] if len(phase_data) > 0 else None
+        
+        fastest_info = {}
+        slowest_info = {}
+        
+        if fastest_record is not None:
+            fastest_info = {
+                '时间': fastest_record.get('Actual Duration (minutes)', 'N/A'),
+                '操作员': fastest_record.get('Operator', 'N/A'),
+                '活动描述': fastest_record.get('Task Description', 'N/A'),
+                '批次号': fastest_record.get('PO Number', 'N/A')
+            }
+        
+        if slowest_record is not None:
+            slowest_info = {
+                '时间': slowest_record.get('Actual Duration (minutes)', 'N/A'),
+                '操作员': slowest_record.get('Operator', 'N/A'),
+                '活动描述': slowest_record.get('Task Description', 'N/A'),
+                '批次号': slowest_record.get('PO Number', 'N/A')
+            }
+        
         results['phase_analysis'][phase] = {
-            '总耗时': total_duration,
             '平均耗时': avg_duration,
+            '最小耗时': min_duration,  # 新增
+            '最大耗时': max_duration,  # 新增
+            '标准差': std_duration,    # 新增
             '活动数量': len(activity_duration),
             '记录数量': len(phase_data),
             '最耗时活动': activity_duration.head(5) if len(activity_duration) > 0 else pd.DataFrame(),
-            '效率最高人员': operator_duration.head(5) if len(operator_duration) > 0 else pd.DataFrame()
+            '效率最高人员': operator_duration.head(5) if len(operator_duration) > 0 else pd.DataFrame(),
+            '最快记录': fastest_info,   # 新增
+            '最慢记录': slowest_info     # 新增
         }
     
     return results
-
-# ==================== 设置中文字体函数 ====================
-def set_chinese_font():
-    """
-    设置matplotlib支持中文显示
-    """
-    system = platform.system()
-    
-    try:
-        if system == "Windows":
-            plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS']
-        elif system == "Darwin":  # macOS
-            plt.rcParams['font.sans-serif'] = ['PingFang SC', 'STHeiti', 'Arial Unicode MS']
-        else:  # Linux
-            plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS']
-        
-        plt.rcParams['axes.unicode_minus'] = False
-        return True
-    except Exception as e:
-        print(f"设置中文字体时出错：{e}")
-        return False
 
 # ==================== 主程序 ====================
 if run_button:
@@ -706,7 +765,7 @@ if run_button:
                 st.markdown('<h2 class="sub-header">📈 批次数据分析结果</h2>', unsafe_allow_html=True)
                 
                 # 创建选项卡
-                batch_tab1, batch_tab2, batch_tab3 = st.tabs(["数据清洗", "SPC控制图", "异常点检测"])
+                batch_tab1, batch_tab2, batch_tab3, batch_tab4 = st.tabs(["数据清洗", "SPC控制图", "完整统计分析", "异常点检测"])
                 
                 with batch_tab1:
                     st.markdown("### 🔄 数据清洗步骤")
@@ -717,9 +776,9 @@ if run_button:
                     if 'spc_chart' in batch_results['figures']:
                         st.pyplot(batch_results['figures']['spc_chart'])
                         
-                        # 显示统计摘要
+                        # 显示基本统计摘要
                         if show_details:
-                            st.markdown("### 📊 统计摘要")
+                            st.markdown("### 📊 基本统计摘要")
                             stats = batch_results['statistics']
                             
                             col1, col2, col3, col4 = st.columns(4)
@@ -730,25 +789,70 @@ if run_button:
                                 st.metric("标准差", f"{stats['overall_std']:.2f}")
                                 st.metric("众数", f"{stats['overall_mode']:.2f} (出现{stats['overall_mode_count']}次)")
                             with col3:
-                                st.metric("目标均值", f"{stats['target_mean']:.2f}分钟")
-                                st.metric("UCL", f"{stats['ucl']:.2f}分钟")
+                                st.metric("最小值", f"{stats['min_value']:.2f}分钟")
+                                st.metric("最大值", f"{stats['max_value']:.2f}分钟")
                             with col4:
-                                st.metric("LCL", f"{stats['lcl']:.2f}分钟")
+                                st.metric("极差", f"{stats['range_value']:.2f}分钟")
                                 st.metric("CPK", f"{stats['cpk']:.3f}")
-                            
-                            # 分位数信息
-                            st.markdown("#### 📌 分位数分析")
-                            col_q1, col_q2, col_q3, col_q4 = st.columns(4)
-                            with col_q1:
-                                st.info(f"前10%分位: {stats['front_10_percentile']:.2f}")
-                            with col_q2:
-                                st.info(f"后10%分位: {stats['back_10_percentile']:.2f}")
-                            with col_q3:
-                                st.info(f"前25%分位: {stats['front_25_percentile']:.2f}")
-                            with col_q4:
-                                st.info(f"后75%分位: {stats['back_25_percentile']:.2f}")
                 
                 with batch_tab3:
+                    st.markdown("### 📊 完整统计分析")
+                    stats = batch_results['statistics']
+                    
+                    # 整体统计
+                    st.markdown("#### 📈 整体统计")
+                    col_a1, col_a2, col_a3, col_a4 = st.columns(4)
+                    with col_a1:
+                        st.info(f"**均值**: {stats['overall_mean']:.2f}分钟")
+                    with col_a2:
+                        st.info(f"**中位数**: {stats['overall_median']:.2f}分钟")
+                    with col_a3:
+                        st.info(f"**众数**: {stats['overall_mode']:.2f}分钟 (出现{stats['overall_mode_count']}次)")
+                    with col_a4:
+                        st.info(f"**标准差**: {stats['overall_std']:.2f}")
+                    
+                    # 分位数分析
+                    st.markdown("#### 📊 分位数分析")
+                    col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+                    with col_b1:
+                        st.success(f"**前10%分位**: {stats['front_10_percentile']:.2f}分钟")
+                    with col_b2:
+                        st.success(f"**后10%分位**: {stats['back_10_percentile']:.2f}分钟")
+                    with col_b3:
+                        st.success(f"**前25%分位**: {stats['front_25_percentile']:.2f}分钟")
+                    with col_b4:
+                        st.success(f"**后75%分位**: {stats['back_25_percentile']:.2f}分钟")
+                    
+                    # 极值分析
+                    st.markdown("#### ⚡ 极值分析")
+                    col_c1, col_c2, col_c3 = st.columns(3)
+                    with col_c1:
+                        st.warning(f"**最小值**: {stats['min_value']:.2f}分钟")
+                    with col_c2:
+                        st.warning(f"**最大值**: {stats['max_value']:.2f}分钟")
+                    with col_c3:
+                        st.warning(f"**极差**: {stats['range_value']:.2f}分钟")
+                    
+                    # 过程能力
+                    st.markdown("#### 🎯 过程能力分析")
+                    col_d1, col_d2, col_d3 = st.columns(3)
+                    with col_d1:
+                        st.metric("CP", f"{stats['cp']:.3f}")
+                    with col_d2:
+                        st.metric("CPK", f"{stats['cpk']:.3f}")
+                    with col_d3:
+                        st.metric("PPK", f"{stats['ppk']:.3f}")
+                    
+                    # 过程能力评估
+                    cpk = stats['cpk']
+                    if cpk >= 1.33:
+                        st.success("✅ **过程能力充足** - 过程满足规格要求")
+                    elif cpk >= 1.0:
+                        st.warning("⚠️ **过程能力尚可** - 需要持续监控")
+                    else:
+                        st.error("❌ **过程能力不足** - 需要立即改进")
+                
+                with batch_tab4:
                     if batch_results['anomalies'] is not None and len(batch_results['anomalies']) > 0:
                         st.markdown(f"### ⚠️ 发现 {len(batch_results['anomalies'])} 个异常点")
                         
@@ -791,7 +895,7 @@ if run_button:
                 st.markdown('<h2 class="sub-header">📋 活动数据分析结果</h2>', unsafe_allow_html=True)
                 
                 # 创建选项卡
-                activity_tab1, activity_tab2 = st.tabs(["数据清洗", "阶段分析"])
+                activity_tab1, activity_tab2 = st.tabs(["数据清洗", "阶段分析 (最大值/最小值)"])
                 
                 with activity_tab1:
                     st.markdown("### 🔄 数据清洗步骤")
@@ -810,46 +914,92 @@ if run_button:
                 
                 with activity_tab2:
                     if activity_results['phase_analysis']:
-                        # 创建阶段总览图表
+                        # 创建阶段统计表格
                         phase_summary = []
                         for phase, analysis in activity_results['phase_analysis'].items():
                             phase_summary.append({
                                 '阶段': phase,
-                                '平均耗时': analysis['平均耗时'],
-                                '总耗时': analysis['总耗时'],
-                                '活动数': analysis['活动数量']
+                                '平均耗时(分钟)': round(analysis['平均耗时'], 2),
+                                '最小耗时(分钟)': round(analysis['最小耗时'], 2),  # 新增
+                                '最大耗时(分钟)': round(analysis['最大耗时'], 2),  # 新增
+                                '标准差': round(analysis['标准差'], 2),            # 新增
+                                '活动数': analysis['活动数量'],
+                                '记录数': analysis['记录数量']
                             })
                         
                         if phase_summary:
                             phase_df = pd.DataFrame(phase_summary)
+                            st.dataframe(phase_df, use_container_width=True, hide_index=True)
                             
-                            # 显示阶段对比图表
-                            fig_phase, ax_phase = plt.subplots(figsize=(10, 5))
-                            bars = ax_phase.bar(phase_df['阶段'], phase_df['平均耗时'])
-                            ax_phase.set_xlabel('阶段')
-                            ax_phase.set_ylabel('平均耗时 (分钟)')
-                            ax_phase.set_title('各阶段平均耗时对比')
+                            # 创建对比图表
+                            fig_phase, axes = plt.subplots(1, 2, figsize=(14, 5))
                             
-                            # 添加数值标签
-                            for bar in bars:
-                                height = bar.get_height()
-                                ax_phase.text(bar.get_x() + bar.get_width()/2., height,
-                                            f'{height:.1f}', ha='center', va='bottom')
+                            # 左图：平均值、最小值、最大值对比
+                            x = range(len(phase_df))
+                            width = 0.25
                             
-                            plt.xticks(rotation=45)
+                            axes[0].bar([i - width for i in x], phase_df['平均耗时(分钟)'], width, label='平均耗时', color='#3B82F6')
+                            axes[0].bar(x, phase_df['最小耗时(分钟)'], width, label='最小耗时', color='#10B981')
+                            axes[0].bar([i + width for i in x], phase_df['最大耗时(分钟)'], width, label='最大耗时', color='#EF4444')
+                            
+                            axes[0].set_xlabel('阶段')
+                            axes[0].set_ylabel('时间 (分钟)')
+                            axes[0].set_title('各阶段耗时对比')
+                            axes[0].set_xticks(x)
+                            axes[0].set_xticklabels(phase_df['阶段'], rotation=45)
+                            axes[0].legend()
+                            axes[0].grid(True, alpha=0.3)
+                            
+                            # 右图：标准差对比
+                            axes[1].bar(phase_df['阶段'], phase_df['标准差'], color='#F59E0B')
+                            axes[1].set_xlabel('阶段')
+                            axes[1].set_ylabel('标准差')
+                            axes[1].set_title('各阶段稳定性对比 (标准差)')
+                            axes[1].tick_params(axis='x', rotation=45)
+                            axes[1].grid(True, alpha=0.3)
+                            
                             plt.tight_layout()
                             st.pyplot(fig_phase)
                         
                         # 显示各阶段详细分析
                         for phase, analysis in activity_results['phase_analysis'].items():
-                            with st.expander(f"### 📌 {phase} 阶段分析"):
-                                col_p1, col_p2, col_p3 = st.columns(3)
+                            with st.expander(f"### 📌 {phase} 阶段详细分析"):
+                                # 基本统计卡片
+                                col_p1, col_p2, col_p3, col_p4 = st.columns(4)
                                 with col_p1:
-                                    st.metric("总耗时", f"{analysis['总耗时']:.2f}分钟")
-                                with col_p2:
                                     st.metric("平均耗时", f"{analysis['平均耗时']:.2f}分钟")
+                                with col_p2:
+                                    st.metric("最小耗时", f"{analysis['最小耗时']:.2f}分钟", delta_color="inverse")
                                 with col_p3:
-                                    st.metric("活动数", analysis['活动数量'])
+                                    st.metric("最大耗时", f"{analysis['最大耗时']:.2f}分钟")
+                                with col_p4:
+                                    st.metric("标准差", f"{analysis['标准差']:.2f}")
+                                
+                                # 最快和最慢记录
+                                col_record1, col_record2 = st.columns(2)
+                                with col_record1:
+                                    st.markdown("#### ⚡ 最快记录")
+                                    if analysis['最快记录']:
+                                        st.success(
+                                            f"**耗时**: {analysis['最快记录']['时间']}分钟\n\n"
+                                            f"**操作员**: {analysis['最快记录']['操作员']}\n\n"
+                                            f"**活动**: {analysis['最快记录']['活动描述']}\n\n"
+                                            f"**批次**: {analysis['最快记录']['批次号']}"
+                                        )
+                                    else:
+                                        st.info("无记录")
+                                
+                                with col_record2:
+                                    st.markdown("#### 🐢 最慢记录")
+                                    if analysis['最慢记录']:
+                                        st.error(
+                                            f"**耗时**: {analysis['最慢记录']['时间']}分钟\n\n"
+                                            f"**操作员**: {analysis['最慢记录']['操作员']}\n\n"
+                                            f"**活动**: {analysis['最慢记录']['活动描述']}\n\n"
+                                            f"**批次**: {analysis['最慢记录']['批次号']}"
+                                        )
+                                    else:
+                                        st.info("无记录")
                                 
                                 if not analysis['最耗时活动'].empty:
                                     st.markdown("#### ⏱️ 耗时最长的活动")
@@ -924,10 +1074,10 @@ else:
                 🔍 异常检测
             </span>
             <span style="background-color: #EFF6FF; padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem;">
-                ⏱️ 阶段分析
+                📈 完整统计
             </span>
             <span style="background-color: #EFF6FF; padding: 0.5rem 1rem; border-radius: 20px; margin: 0.5rem;">
-                📈 过程能力
+                ⚡ 极值分析
             </span>
         </div>
     </div>
@@ -941,9 +1091,10 @@ else:
         #### 📈 批次分析功能
         - 数据自动清洗（7个清洗步骤）
         - SPC控制图绘制（红-黄-绿区域）
-        - 4种判异规则检测
-        - 过程能力指数(CP/CPK/PPK)
-        - 分位数统计分析（前10%、后10%等）
+        - 4种判异规则检测（图中标记不同颜色）
+        - 完整统计分析（均值、中位数、众数）
+        - 分位数分析（前/后十分位、前/后四分位）
+        - 正态分布拟合
         - 异常点自动标记和导出
         """)
     
@@ -952,7 +1103,8 @@ else:
         #### 📋 活动分析功能
         - 活动数据自动清洗
         - 4个阶段分析（清场前准备、清场、切换、产线配置）
-        - 各阶段耗时统计
+        - 各阶段统计（平均值、最小值、最大值、标准差）
+        - 最快记录和最慢记录详情
         - 耗时最长的活动排名
         - 效率最高的人员排名
         - 阶段对比图表
@@ -963,8 +1115,8 @@ st.markdown("---")
 st.markdown(
     """
     <div style="text-align: center; color: #6B7280; padding: 1rem;">
-        <p>DCO综合分析系统 v2.2 | 完全兼容Python 3.13 | 稳定可靠版本</p>
-        <p style="font-size: 0.8rem;">© 2024 版权所有 | 包含SPC分析、异常检测、阶段分析</p>
+        <p>DCO综合分析系统 v3.0 | 完整统计分析版 | 包含SPC控制图、异常点标记、正态分布拟合、极值分析</p>
+        <p style="font-size: 0.8rem;">© 2024 版权所有 | 解决中文显示、异常点标记、完整统计、极值分析问题</p>
     </div>
     """,
     unsafe_allow_html=True
