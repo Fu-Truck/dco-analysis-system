@@ -15,6 +15,37 @@ import sys
 
 warnings.filterwarnings('ignore')
 
+# ==================== 检查 scikit-learn 是否可用 ====================
+try:
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import LabelEncoder
+    from sklearn.model_selection import train_test_split
+    from sklearn.metrics import mean_squared_error, r2_score
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    # 创建虚拟类以避免导入错误
+    class RandomForestRegressor:
+        def __init__(self, **kwargs):
+            raise ImportError("scikit-learn not available")
+        def fit(self, X, y):
+            raise ImportError("scikit-learn not available")
+        def predict(self, X):
+            raise ImportError("scikit-learn not available")
+    
+    class LabelEncoder:
+        def fit_transform(self, x):
+            raise ImportError("scikit-learn not available")
+    
+    def train_test_split(*args, **kwargs):
+        raise ImportError("scikit-learn not available")
+    
+    def mean_squared_error(*args, **kwargs):
+        raise ImportError("scikit-learn not available")
+    
+    def r2_score(*args, **kwargs):
+        raise ImportError("scikit-learn not available")
+
 # ==================== 页面配置 ====================
 st.set_page_config(
     page_title="DCO综合分析系统",
